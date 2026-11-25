@@ -10,7 +10,7 @@ import { addressRuns } from "@aihot/contracts/addresses";
 import { MentionText } from "../components/ui/MentionText";
 import { cachedPage, loadOr404, pagePathname } from "../lib/api.server";
 import { pageReuse } from "../lib/page-reuse";
-import { breadcrumbLd, pageMeta, storyArticleLd, storyLd, titled } from "../lib/seo";
+import { breadcrumbLd, pageMeta, storyArticleLd, storyLd, titled, titleCacheSeconds } from "../lib/seo";
 import { beijingDate, beijingTime } from "@aihot/contracts/time";
 import { byBeijingDay, monthDay, monthDayTime, relativeTime } from "../lib/format";
 import { useCurrentSection } from "../lib/motion";
@@ -25,7 +25,7 @@ import { PhoneBar } from "../components/shell/PhoneBar";
 import { hotInNav, navUp } from "../components/shell/nav";
 import type { Screen } from "../components/shell/screens";
 import { Link } from "../lib/link";
-import { L, localeOf, localizePath, translator, useLocale, useT } from "../lib/i18n";
+import { apiIn, L, localeOf, localizePath, translator, useLocale, useT } from "../lib/i18n";
 
 // Stories are reached from the hot board, as long as the site shows it.
 const UP = navUp("/hot");
@@ -34,8 +34,9 @@ export { pageHeaders as headers } from "../lib/api.server";
 export const { clientLoader, shouldRevalidate } = pageReuse<typeof loader>();
 
 export async function loader({ params, request }: Route.LoaderArgs) {
-  const story = await loadOr404<StoryDetail>(`/api/site/stories/${encodeURIComponent(params.publicId)}`, { signal: request.signal, merged: (id) => localizePath(`/story/${id}`, localeOf(pagePathname(request))) });
-  return cachedPage(300, { story });
+  const locale = localeOf(pagePathname(request));
+  const story = await loadOr404<StoryDetail>(apiIn(`/stories/${encodeURIComponent(params.publicId)}`, locale), { signal: request.signal, merged: (id) => localizePath(`/story/${id}`, locale) });
+  return cachedPage(titleCacheSeconds(300, locale, story.sourceCount >= STORY_INDEX_MIN_SOURCES ? story.title : null), { story });
 }
 
 export function meta({ loaderData, location }: Route.MetaArgs) {

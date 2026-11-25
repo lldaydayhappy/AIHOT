@@ -13,7 +13,7 @@ import type { AgentPanelProps } from "../../modules";
 import { AGENT_PARTS, GUIDE_CLIENTS, TAG } from "./module-parts";
 import { Address, Ask, Block, Bullets, Details, Mono, PanelHead, Step, Steps, Table, Tips } from "./parts";
 import { Link } from "../../lib/link";
-import { L, shownIn, useLocale, useT } from "../../lib/i18n";
+import { feedPath, L, shownIn, useLocale, useT } from "../../lib/i18n";
 
 const V = PUBLIC_INTERFACE_VERSION;
 
@@ -39,13 +39,14 @@ const MCP_CLIENTS = [
 export function McpPanel(props: AgentPanelProps) {
   const t = useT();
   const locale = useLocale();
+  const tools = shownIn(locale, AGENT_PARTS.flatMap((p) => p.tools ?? []), (tool) => tool.does);
   const url = addressOf(props, "/api/mcp");
   const name = SITE.mcpPrefix;
   const [client, setClient] = useState<string>("claude");
   return (
     <>
       <PanelHead label={`MCP · ${V}`} title={t(`填一个地址，Agent 多出 ${mcpToolCount()} 个工具`, `Add one URL and your agent gets ${mcpToolCount()} new tools`)}>
-        {t("标准 Streamable HTTP，匿名只读，不用 token，也不读你的登录状态。适合 Claude 桌面版、Cursor、Cherry Studio 这类支持远程 MCP 的客户端。", "Standard Streamable HTTP, anonymous and read-only: no token needed, and it never accesses your account. Works with clients that support remote MCP, such as Claude Desktop, Cursor and Cherry Studio.")}
+        {t("标准 Streamable HTTP，匿名只读，不用 token，也不读你的登录状态。适合 Claude 桌面版、Cursor、Cherry Studio 这类支持远程 MCP 的客户端。", `Standard Streamable HTTP, anonymous and read-only: no token needed, and it never accesses your account. Works with clients that support remote MCP, such as Claude Desktop, Cursor and Cherry Studio.${ENGLISH ? ` The news tools answer in English when your agent passes lang "en".` : ""}`)}
       </PanelHead>
       <Steps>
         <Step n={1} title={t("复制服务地址", "Copy the server URL")}>
@@ -60,12 +61,12 @@ export function McpPanel(props: AgentPanelProps) {
           {client === "other" && <p className="mt-3">{t(`在客户端的 MCP 或连接器设置里新建一项：名称填 ${name}，地址填上面的网址，认证选“无”，不要填 API Key。只支持本地命令的客户端，先用它自带的远程 MCP 代理。`, `In your client's MCP or connector settings, add a new entry: name it ${name}, paste the URL above, set authentication to "None", and leave the API key empty. If your client only runs local commands, go through its built-in remote MCP proxy.`)}</p>}
         </Step>
         <Step n={3} title={t("让 Agent 调一次", "Test it with your agent")}>
-          <Ask text={t(`请调用 ${T.latest}，告诉我过去 24 小时最重要的${subjectAfter(" 5 条", "资讯")}，并附 ${SITE.name} 链接。`, `Call ${T.latest} and tell me the 5 most important ${SITE.subject} news stories of the past 24 hours, with ${SITE.name} links.`)} />
-          <p className="mt-2 text-ui-label text-ink-3">{t(`客户端显示调用了 ${T.latest}，回答里有时间范围、中文摘要和 ${new URL(props.base).host} 链接，就是连上了。`, `If your client shows a call to ${T.latest} and the answer has a time range, summaries and ${new URL(props.base).host} links, you're connected. The tool returns its summaries in Chinese.`)}</p>
+          <Ask text={t(`请调用 ${T.latest}，告诉我过去 24 小时最重要的${subjectAfter(" 5 条", "资讯")}，并附 ${SITE.name} 链接。`, `Call ${T.latest} with lang "en" and tell me the 5 most important ${SITE.subject} news stories of the past 24 hours, with ${SITE.name} links.`)} />
+          <p className="mt-2 text-ui-label text-ink-3">{t(`客户端显示调用了 ${T.latest}，回答里有时间范围、中文摘要和 ${new URL(props.base).host} 链接，就是连上了。`, `If your client shows a call to ${T.latest} and the answer has a time range, summaries and ${new URL(props.base).host} links, you're connected. Without lang "en" the tool answers in Chinese.`)}</p>
         </Step>
       </Steps>
 
-      <Block title={t(`${mcpToolCount()} 个工具`, `${mcpToolCount()} tools`)}>
+      <Block title={t(`${mcpToolCount()} 个工具`, `${MCP_TOOLS.length + tools.length} tools available in English`)}>
         <Table
           head={[t("工具", "Tool"), t("能做什么", "What it does"), t("可以这样问", "Try asking")]}
           minWidth={600}
@@ -77,7 +78,7 @@ export function McpPanel(props: AgentPanelProps) {
             [<Mono>{T.daily}</Mono>, t(subjectAfter("最新或指定日期的", "日报"), `The latest ${SITE.subject} Daily, or the one for a given date`), t("给我今天的日报。", `Give me today's ${SITE.subject} Daily.`)],
             [<Mono>{T.weekly}</Mono>, t(subjectAfter("最新或指定一周的", "周报"), `The latest ${SITE.subject} Weekly, or the one for a given week`), t(`${subjectAfter("这周", "圈")}有哪些大事？`, `What were the big ${SITE.subject} stories this week?`)],
             [<Mono>{T.monthly}</Mono>, t(subjectAfter("最新或指定月份的", "月报"), `The latest ${SITE.subject} Monthly, or the one for a given month`), t(`${subjectAfter("上个月", "圈")}发生了什么？`, `What happened in ${SITE.subject} last month?`)],
-            ...shownIn(locale, AGENT_PARTS.flatMap((a) => a.tools ?? []), (x) => x.does).map((x) => [<Mono>{x.name}</Mono>, t(x.does), t(x.ask)]),
+            ...tools.map((x) => [<Mono>{x.name}</Mono>, t(x.does), t(x.ask)]),
           ]}
         />
       </Block>
@@ -116,9 +117,9 @@ export function McpPanel(props: AgentPanelProps) {
 const ENTRIES_EN = ENGLISH?.reports.entry.many ?? REPORTS.entry.noun;
 
 const FEEDS = [
-  { name: L("精选摘要", "Top Picks · Summaries"), badge: L("推荐", "Recommended"), path: "/feed.xml", desc: L("最新 50 条精选，带标题、摘要、站内阅读和原文链接。", "The latest 50 top picks, each with its headline, summary, and links to the reading page and the original.") },
-  { name: L("精选全文", "Top Picks · Full Text"), path: "/feed/full.xml", desc: L("同样的 50 条；允许转载的来源直接附全文，其余仍是摘要。", "The same 50 items, with the full text where the source allows republishing and the summary otherwise.") },
-  { name: L("全部动态", `All ${SITE.subject} News`), path: "/feed/all.xml", desc: L("最近 7 天的公开动态，按原文发布时间倒序。", "Everything public from the last 7 days, newest first by original publish time.") },
+  { name: L("精选摘要", "Top Picks · Summaries"), badge: L("推荐", "Recommended"), path: "/feed.xml", desc: L("最新 50 条精选，带标题、摘要、站内阅读和原文链接。", "The latest top picks (up to 50), each with its headline, summary, and links to the reading page and the original. A pick appears once it is in English.") },
+  { name: L("精选全文", "Top Picks · Full Text"), path: "/feed/full.xml", desc: L("同样的 50 条；允许转载的来源直接附全文，其余仍是摘要。", "The same picks, with the original full text where the source allows republishing (not for sources written in Chinese) and the summary otherwise.") },
+  { name: L("全部动态", `All ${SITE.subject} News`), path: "/feed/all.xml", desc: L("最近 7 天的公开动态，按原文发布时间倒序。", "Everything public from the last 7 days, newest first by original publish time, once it is in English.") },
   { name: L(withSubject("日报"), `${SITE.subject} Daily`), path: "/feed/daily.xml", desc: L(`${EDITION_WHEN.daily}（北京时间）一期：头条导语加整期目录，保留最近 30 期。`, `New issue ${WHEN_EN.daily}: the lead story's intro plus the full table of contents. Keeps the last 30 issues.`) },
   { name: L(withSubject("周报"), `${SITE.subject} Weekly`), path: "/feed/weekly.xml", desc: L(`${EDITION_WHEN.weekly}（北京时间）一期：总述加按栏目分好的${REPORTS.entry.noun}，保留最近 12 期。`, `New issue ${WHEN_EN.weekly}: an overview plus the ${ENTRIES_EN} grouped by section. Keeps the last 12 issues.`) },
   { name: L(withSubject("月报"), `${SITE.subject} Monthly`), path: "/feed/monthly.xml", desc: L(`${EDITION_WHEN.monthly}（北京时间）一期：总述加按栏目分好的${REPORTS.entry.noun}，保留最近 12 期。`, `New issue ${WHEN_EN.monthly}: an overview plus the ${ENTRIES_EN} grouped by section. Keeps the last 12 issues.`) },
@@ -138,7 +139,7 @@ export function RssPanel(props: AgentPanelProps) {
         {lead}
       </PanelHead>
       <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
-        {FEEDS.map((f) => (
+        {FEEDS.map((f) => ({ ...f, path: feedPath(f.path, locale) })).map((f) => (
           <div key={f.path} className="card flex flex-col p-4">
             <div className="flex items-center gap-2">
               <span className="text-ui-body font-semibold text-ink">{t(f.name)}</span>
@@ -160,8 +161,9 @@ export function RssPanel(props: AgentPanelProps) {
           minWidth={420}
           rows={FEED_CATEGORIES.map(([slug, label]) => [
             <span className="font-medium text-ink">{t(label)}</span>,
-            <span className="inline-flex items-center gap-2"><Mono>{`/feed/category/${slug}.xml`}</Mono><CopyButton text={addressOf(props, `/feed/category/${slug}.xml`)} className="!h-6 !px-1.5" /></span>,
-            <span className="inline-flex items-center gap-2"><Mono>{`/feed/full/category/${slug}.xml`}</Mono><CopyButton text={addressOf(props, `/feed/full/category/${slug}.xml`)} className="!h-6 !px-1.5" /></span>,
+            ...[`/feed/category/${slug}.xml`, `/feed/full/category/${slug}.xml`].map((path) => feedPath(path, locale)).map((path) => (
+              <span className="inline-flex items-center gap-2"><Mono>{path}</Mono><CopyButton text={addressOf(props, path)} className="!h-6 !px-1.5" /></span>
+            )),
           ])}
         />
       </Block>
@@ -189,11 +191,12 @@ export function ApiPanel(props: AgentPanelProps) {
   if (ACCESS.ratePerMinute) pace += t(`同一个 IP 每分钟超过约 ${ACCESS.ratePerMinute} 次会收到 429，请按 Retry-After 等待，不要并发重试。`, ` More than about ${ACCESS.ratePerMinute} requests a minute from one IP get a 429: wait as Retry-After says, and don't retry in parallel.`);
   const [recipe, setRecipe] = useState<string>("latest");
   const recipes = shownIn(locale, AGENT_PARTS.flatMap((a) => a.recipes ?? []), (r) => r.label);
-  const items = `${base}/api/v1/items?mode=selected&window=24h&limit=20`;
+  // English pages show the English answer: lang=en on any reader's address.
+  const items = `${base}/api/v1/items?mode=selected&window=24h&limit=20${locale === "en" && ENGLISH ? "&lang=en" : ""}`;
   return (
     <>
       <PanelHead label={`REST API · ${V}`} title={t("匿名 GET，拿来就能用", "Anonymous GET, ready to use")}>
-        {t(<>不用 token；浏览器跨域、curl 和各语言默认的 HTTP 客户端都能直接调。路径是 /api/v1，字段和错误码以 <a href="/openapi-v1.json" className={link}>OpenAPI</a> 为准。</>, <>No token needed: call it straight from a browser (cross-origin works), curl or any language's standard HTTP client. The path is /api/v1, and the <a href="/openapi-v1.json" className={link}>OpenAPI</a> definition is the reference for fields and error codes.</>)}
+        {t(<>不用 token；浏览器跨域、curl 和各语言默认的 HTTP 客户端都能直接调。路径是 /api/v1，字段和错误码以 <a href="/openapi-v1.json" className={link}>OpenAPI</a> 为准。</>, <>No token needed: call it straight from a browser (cross-origin works), curl or any language's standard HTTP client. The path is /api/v1, and the <a href="/openapi-v1.json" className={link}>OpenAPI</a> definition is the reference for fields and error codes.{ENGLISH ? " Add lang=en for titles, summaries and page links in English." : ""}</>)}
       </PanelHead>
       <CodeBlock className="mt-6" title={t("第一个请求", "Your first request")} lang="bash" code={`${curl} '${items}'`} />
 
@@ -237,7 +240,7 @@ export function ApiPanel(props: AgentPanelProps) {
             ...shownIn(locale, AGENT_PARTS.flatMap((a) => (a.api ? [a.api] : [])), (api) => api.group)
               .flatMap((api) => [{ group: t(api.group) }, ...api.rows.map(([path, does, often]) => [<Mono>{path}</Mono>, t(does), t(often)])]),
             { group: t("给 AI 助手", "For AI assistants") },
-            [<Mono>/api/v1/agent</Mono>, t(`给 Agent 的使用说明，列出的地址返回整理好的中文 Markdown${GUIDE_CLIENTS ? `；${GUIDE_CLIENTS.zh} 用的就是它们` : ""}`, `Instructions for agents; the URLs it lists return clean Chinese Markdown${GUIDE_CLIENTS ? `, and they power ${GUIDE_CLIENTS.en}` : ""}`), t("需要时", "When needed")],
+            [<Mono>/api/v1/agent</Mono>, t(`给 Agent 的使用说明，列出的地址返回整理好的中文 Markdown${GUIDE_CLIENTS ? `；${GUIDE_CLIENTS.zh} 用的就是它们` : ""}`, `Instructions for agents; the URLs it lists return clean Markdown, in English with lang=en${GUIDE_CLIENTS ? `, and they power ${GUIDE_CLIENTS.en}` : ""}`), t("需要时", "When needed")],
             { group: t("完整精选同步", "Full top picks sync") },
             [<Mono>/api/v1/selected/snapshot</Mono>, t("当前全部精选，分页一次拿全", "All current top picks, paginated so you can fetch the full set"), t("只在第一次", "Only the first time")],
             [<Mono>/api/v1/selected/changes</Mono>, t("之后的新增、修改和撤选", "What's been added, changed or dropped from top picks since"), t("几分钟一次", "Every few minutes")],
