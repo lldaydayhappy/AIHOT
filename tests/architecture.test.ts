@@ -4,13 +4,14 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { assertNoViolations } from "./source-checks.ts";
+import { assertNoViolations, sourceFiles } from "./source-checks.ts";
 import { presentationAssertions, rawLoaderPaths } from "./lesson-checks.ts";
 import { clockViolationsByFile } from "./test-clock.ts";
 import { after, test } from "node:test";
 import { fontSizeViolations } from "./font-size.ts";
 import { cssMotionTokens, motionViolations } from "./motion.ts";
 import { routerLinkViolations, webTextViolations } from "./web-text.ts";
+import { ARTICLE_ID_PATTERN } from "@aihot/contracts/taxonomy";
 import { closeDb, sql } from "@aihot/backend/db";
 
 after(closeDb);
@@ -54,6 +55,13 @@ function sources(dir: string, kind = /\.tsx?$/): Array<{ file: string; text: str
 
 /** Module specifiers a file imports (static, dynamic and type imports). */
 const specifiers = (text: string) => [...text.matchAll(/\b(?:from|import)\s*\(?\s*["']([^"']+)["']/g)].map((m) => m[1]!);
+
+test("browser suites run in the web checks before the parallel backend tests", () => {
+  const misplaced = sourceFiles("*.test.ts").filter(file =>
+    /^(?:modules\/[^/]+\/)?tests\//.test(file)
+    && /\b(?:chromium|firefox|webkit)\.launch\s*\(/.test(readFileSync(path.join(ROOT, file), "utf8")));
+  assert.deepEqual(misplaced, [], `请把使用浏览器的测试放进 apps/web/tests 或本模块的 web/tests，随网页测试顺序运行：\n${misplaced.join("\n")}`);
+});
 
 /** A specifier as a path under packages/backend/src (`events/group.ts`), or null outside the backend. */
 function backendPath(file: string, spec: string): string | null {
@@ -178,6 +186,12 @@ const moduleWeb = (kind?: RegExp) => modules(kind).filter(({ file }) => /^module
 const production = () => [...PRODUCTION.flatMap((dir) => sources(dir)), { file: "apps/web/server.ts", text: readFileSync(path.join(ROOT, "apps/web/server.ts"), "utf8") }, ...modules()];
 const words = (text: string) => new Set(text.match(/[A-Za-z_][A-Za-z0-9_]*/g));
 
+test("article identifiers use the same format at every entry point", () => {
+  const copies = production().filter(({ file, text }) =>
+    file !== "packages/contracts/src/taxonomy.ts" && text.includes(ARTICLE_ID_PATTERN.toString()));
+  assert.deepEqual(copies.map(({ file }) => file), [], "请引用 @aihot/contracts/taxonomy 的 ARTICLE_ID_PATTERN 校验文章编号");
+});
+
 test("every table and column is used by the code that reads and writes the database", async () => {
   const files = [...["packages/backend/src", "apps/api/src", "apps/worker/src"].flatMap((dir) => sources(dir)), ...modules()].map(({ text }) => words(text));
   const columns = await sql<{ table_name: string; column_name: string }[]>`
@@ -269,7 +283,8 @@ test("modules do not import other modules", () => {
 // The web's own code: the app, the modules' pages, and the site's pages and drawings, stylesheets included.
 // Each line is read without its comments: a word in a comment is neither a class nor a call.
 const WEB_CODE = /\.(?:tsx?|css)$/;
-const webLines = () => [...sources("apps/web/app", WEB_CODE), ...moduleWeb(WEB_CODE), ...sources("site", WEB_CODE)].flatMap(({ file, text }) =>
+const webSources = (kind = WEB_CODE) => [...sources("apps/web/app", kind), ...moduleWeb(kind), ...sources("site", kind)];
+const webLines = () => webSources().flatMap(({ file, text }) =>
   text.split("\n")
     .map((line, i) => ({ file, at: `${file}:${i + 1}`, line: line.replace(/\/\*.*?\*\//g, "").replace(/(^|\s)\/\/.*$/, "") }))
     .filter(({ line }) => !/^\s*(\/\/|\/\*|\*)/.test(line)));
@@ -306,6 +321,12 @@ test("the clipboard is written only through lib/clipboard.ts", () => {
     .filter(({ file, line }) => file !== "apps/web/app/lib/clipboard.ts" && /navigator\.clipboard|execCommand\(\s*["']copy/.test(line))
     .map(({ at }) => at);
   assert.deepEqual(found, [], "copy with copyText from lib/clipboard.ts");
+});
+
+test("components use React's layout effect directly", () => {
+  const environmentChoice = /typeof\s+window\s*[!=]==?\s*["']undefined["']\s*\?\s*(?:(?:[\w.]+|\(\s*\)\s*=>\s*\{\s*\})\s*:\s*)?(?:React\.)?useLayoutEffect\b/;
+  const copies = webSources(/\.tsx?$/).filter(({ text }) => environmentChoice.test(text));
+  assert.deepEqual(copies.map(({ file }) => file), [], "直接使用 React 的 useLayoutEffect，服务端渲染会跳过它");
 });
 
 // Scripts read the reader's reduced-motion preference through apps/web/app/lib/motion.ts (reducedMotion,
