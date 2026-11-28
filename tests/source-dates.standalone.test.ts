@@ -47,6 +47,38 @@ test('"at" between the date and the time joins them like a space', () => {
   assert.deepEqual(readPublicationDate("2026-09-26 at 10:30").publicationTime, "2026-09-26T02:30:00.000Z");
 });
 
+test("a Japanese time written with 時 and 分 keeps its clock", () => {
+  // ITmedia's news list prints "2026年11月25日 15時12分" (https://www.itmedia.co.jp/news/).
+  assert.equal(iso("2026年11月25日 15時12分"), "2026-11-25T07:12:00.000Z");
+  assert.equal(iso("2026年11月25日 15時12分", "+09:00"), "2026-11-25T06:12:00.000Z");
+  assert.equal(iso("2026年11月25日 15時12分30秒"), "2026-11-25T07:12:30.000Z");
+  assert.equal(iso("2026年11月25日 午後3時12分"), "2026-11-25T07:12:00.000Z");
+  assert.equal(iso("2026年11月25日 午前3時12分"), "2026-11-24T19:12:00.000Z");
+  assert.equal(readPublicationDate("2026年11月25日 15時12分").publicationTime, "2026-11-25T07:12:00.000Z");
+  // A weekday between the day and the clock ("2026年11月27日（金）16時47分") is a clock these rules do
+  // not reach, so the date keeps only its calendar day instead of claiming that midnight.
+  assert.deepEqual(readPublicationDate("2026年11月27日（金）16時47分"), {
+    publishedAt: new Date("2026-11-26T16:00:00.000Z"),
+    publicationTime: "2026-11-27",
+  });
+  // An AM/PM there is no reason to drop the day either.
+  assert.deepEqual(readPublicationDate("2026年11月27日（金）午後4時47分"), {
+    publishedAt: new Date("2026-11-26T16:00:00.000Z"),
+    publicationTime: "2026-11-27",
+  });
+  // The space between the day and the hour is kept, and one-digit minutes and seconds still read.
+  assert.equal(iso("2026/11/2 9時47分"), "2026-11-02T01:47:00.000Z");
+  assert.equal(iso("2026年11月27日 9時7分"), "2026-11-27T01:07:00.000Z");
+  assert.equal(iso("2026年11月27日 午後4時47分7秒"), "2026-11-27T08:47:07.000Z");
+  // The AM/PM of a later time is no part of the clock read.
+  assert.equal(iso("2026年11月27日 4:47（更新：午後5時30分）"), "2026-11-26T20:47:00.000Z");
+  // 午前/午後 right after a numeric day keeps the day apart from the hour.
+  assert.equal(iso("2026/11/2午前9時47分"), "2026-11-02T01:47:00.000Z");
+  assert.equal(iso("2026/11/3午後4時47分"), "2026-11-03T08:47:00.000Z");
+  // A clock inside parentheses goes unread, so the date stays a calendar day.
+  assert.equal(readPublicationDate("Nov 27, 2026 (午後4時47分)").publicationTime, "2026-11-27");
+});
+
 test("an abbreviated month may end with a period", () => {
   assert.equal(iso("Sept. 26, 2026"), "2026-09-25T16:00:00.000Z");
   assert.equal(iso("Published Sept. 26, 2026"), "2026-09-25T16:00:00.000Z");
@@ -219,6 +251,16 @@ test("a byline ahead of the date in the same element is no part of it", () => {
   assert.deepEqual(readRelativeDate("版面之外·今天 15:46", now), readRelativeDate("今天 15:46", now));
   assert.deepEqual(readRelativeDate("创业邦的创作者·48分钟前", now), { publishedAt: new Date("2026-10-24T09:42:00Z"), publicationTime: "2026-10-24T09:42:00.000Z" });
   assert.deepEqual(readRelativeDate("20社 · 昨天 09:00", now), readRelativeDate("昨天 09:00", now));
+});
+
+test("an element that opens with the separator ahead of its date is read as the date alone", () => {
+  const now = new Date("2026-10-24T10:30:00.000Z");
+  // A listing that prints no byline still starts its date element with the separator: "· 37分钟前", "· 2小时前".
+  assert.deepEqual(readRelativeDate("· 2小时前", now), readRelativeDate("2小时前", now));
+  assert.deepEqual(readRelativeDate("· 37分钟前", now), readRelativeDate("37分钟前", now));
+  assert.deepEqual(readRelativeDate("· 今天 15:46", now), readRelativeDate("今天 15:46", now));
+  // Attached to the words, "·" is punctuation inside one text, not a separator: still no date.
+  assert.deepEqual(readRelativeDate("·今天 15:46", now), { publishedAt: null, publicationTime: null });
 });
 
 test("an age in short English units reads like the long ones", () => {

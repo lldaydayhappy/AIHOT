@@ -26,50 +26,96 @@ function atOffset(y: string | number, mo: string | number, d: string | number, h
 }
 
 /**
+ * A Japanese page prints the clock with 時 and 分 ("2026年11月25日 15時12分", ITmedia) and 午前/午後 for
+ * AM/PM. That is the same clock "15:12" and "3:12 PM" print, so it is rewritten to those forms before
+ * anything reads it; "15時" alone is no time and is left as printed.
+ */
+function normalizePrintedTime(value: string): string {
+  return value.replace(
+    /(?:(午前|午後)\s*)?(\d{1,2})\s*[時时]\s*(\d{1,2})\s*分(?:\s*(\d{1,2})\s*秒)?/g,
+    (match, meridiem: string | undefined, hour: string, minute: string, second: string | undefined, at: number, whole: string) => {
+      const h = Number(hour);
+      if (h > 23 || Number(minute) > 59 || (second !== undefined && Number(second) > 59)) return match;
+      // The space ahead of the hour stays (it parts "2026/11/2" from "9時"), and the minute and second
+      // take two digits, as the clock rules read them.
+      const clock = `${hour}:${minute.padStart(2, "0")}${second === undefined ? "" : `:${second.padStart(2, "0")}`}`;
+      if (!meridiem) return clock;
+      if (h > 12) return match;
+      // 午前12時 is midnight and 午後12時 is noon, as 12 AM and 12 PM are.
+      const hour12 = h === 0 ? 12 : h;
+      // 午前 may sit right after a day ("2026/11/2午前9時47分"): a space keeps the hour out of it.
+      const gap = /\d$/.test(whole.slice(0, at)) ? " " : "";
+      return `${gap}${clock.replace(/^\d+/, String(hour12))} ${meridiem === "午後" ? "PM" : "AM"}`;
+    },
+  );
+}
+
+/**
  * A published date as a source prints it. Date.parse is kept only where it reads the same
  * on every host: a time with its zone. A calendar day always belongs to the source, including ISO date-only text. Anything else it would read
  * in the server's local zone (UTC in Docker), so "2026-09-26 10:00" is read in the source's offset instead.
  */
-export function parseLooseDate(value: string | null | undefined, utcOffset = "+08:00"): Date | null {
-  if (!value) return null;
+/** A date read from printed text, and whether that text printed a clock or only a calendar day. */
+interface PrintedDate {
+  at: Date | null;
+  timed: boolean;
+}
+
+function parsePrintedDate(value: string | null | undefined, utcOffset: string): PrintedDate {
+  const none: PrintedDate = { at: null, timed: false };
+  if (!value) return none;
   // "Sep 26, 2026 at 10:30": "at" joins a date and its time like a space.
-  const v = value.trim().replace(/(\d),?\s+at\s+(?=\d{1,2}:\d{2})/gi, "$1 ");
-  if (!v) return null;
+  const v = normalizePrintedTime(value.trim()).replace(/(\d),?\s+at\s+(?=\d{1,2}:\d{2})/gi, "$1 ");
+  if (!v) return none;
   const compact = /^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/.exec(v);
-  if (compact) return atOffset(compact[1]!, compact[2]!, compact[3]!, compact[4]!, compact[5]!, compact[6]!, utcOffset);
+  if (compact) return { at: atOffset(compact[1]!, compact[2]!, compact[3]!, compact[4]!, compact[5]!, compact[6]!, utcOffset), timed: true };
   const yearFirst = /(\d{4})[-/.年](\d{1,2})[-/.月](\d{1,2})日?(?:(?:T|\s*)(\d{1,2}):(\d{2})(?::(\d{2}))?)?/.exec(v);
   const monthFirst = /\b(\d{1,2})\/(\d{1,2})\/(\d{4})(?:(?:T|\s+)(\d{1,2}):(\d{2})(?::(\d{2}))?)?/.exec(v);
+  const numericMatch = yearFirst ?? monthFirst;
   const numeric = yearFirst ?? monthFirst?.map((part, i, match) => i === 1 ? match[3]! : i === 2 ? match[1]! : i === 3 ? match[2]! : part);
-  if (numeric && !calendarDay(numeric[1]!, numeric[2]!, numeric[3]!)) return null;
+  if (numeric && !calendarDay(numeric[1]!, numeric[2]!, numeric[3]!)) return none;
   const english = /\b([a-z]{3,9})\.?\s+(\d{1,2})(?:st|nd|rd|th)?[,]?\s+(\d{4})\b/i.exec(v)
     ?? /\b(\d{1,2})\s+([a-z]{3,9})\.?[,]?\s+(\d{2}|\d{4})\b/i.exec(v)?.map((part, i, match) => i === 1 ? match[2]! : i === 2 ? match[1]! : part);
   if (english) {
     if (english[3]!.length === 2) english[3] = String(Number(english[3]) + (Number(english[3]) < 50 ? 2000 : 1900));
     const month = Date.parse(`${english[1]} 1, ${english[3]} 00:00:00 GMT`);
-    if (!Number.isFinite(month) || !calendarDay(english[3]!, new Date(month).getUTCMonth() + 1, english[2]!)) return null;
+    if (!Number.isFinite(month) || !calendarDay(english[3]!, new Date(month).getUTCMonth() + 1, english[2]!)) return none;
   }
-  if (!numeric && !english) return null;
+  if (!numeric && !english) return none;
   const text = v.replace(/(\d)(st|nd|rd|th)\b/gi, "$1");
   if (EXPLICIT_ZONE.test(v)) {
     const direct = Date.parse(text);
-    if (Number.isFinite(direct)) return new Date(direct);
-    if (!numeric) return null;
+    if (Number.isFinite(direct)) return { at: new Date(direct), timed: true };
+    if (!numeric) return none;
   }
   // 2026-09-26 / 2026/09/26 / 2026-09-26T10:00 / 2026年9月26日 (+ optional time), interpreted in the given offset.
   const m = numeric;
   if (m) {
     const [, y, mo, d, h = "00", mi = "00", s = "00"] = m;
-    const meridiem = /\d:\d{2}(?::\d{2})?\s*([AP]M)\b/i.exec(v)?.[1]?.toUpperCase();
-    if (meridiem && (Number(h) < 1 || Number(h) > 12)) return null;
+    // Only an AM/PM right after the clock read here is its own: another time later in the text
+    // ("2026年11月27日 4:47（更新：午後5時30分）") has its own, and a day read alone has none.
+    const after = m[4] === undefined ? "" : v.slice(numericMatch!.index + numericMatch![0].length);
+    const meridiem = /^\s*([AP]M)\b/i.exec(after)?.[1]?.toUpperCase();
+    if (meridiem && (Number(h) < 1 || Number(h) > 12)) return none;
     const hour = meridiem ? Number(h) % 12 + (meridiem === "PM" ? 12 : 0) : h;
-    return atOffset(y!, mo!, d!, hour, mi, s, utcOffset);
+    // The time group is what makes it timed: a clock the date rules here do not reach (a weekday
+    // between the day and the time) is still only the calendar day.
+    return { at: atOffset(y!, mo!, d!, hour, mi, s, utcOffset), timed: m[4] !== undefined };
   }
   // Parse English wall-clock fields in UTC so the host's daylight-saving rules cannot shift them.
   const en = Date.parse(`${text} GMT`);
   const englishDay = english && !/\d:\d/.test(text) ? Date.parse(`${english[1]} ${english[2]}, ${english[3]} GMT`) : NaN;
-  if (!Number.isFinite(en) && !Number.isFinite(englishDay)) return null;
+  if (!Number.isFinite(en) && !Number.isFinite(englishDay)) return none;
   const utc = new Date(Number.isFinite(en) ? en : englishDay);
-  return atOffset(utc.getUTCFullYear(), utc.getUTCMonth() + 1, utc.getUTCDate(), utc.getUTCHours(), utc.getUTCMinutes(), utc.getUTCSeconds(), utcOffset);
+  return {
+    at: atOffset(utc.getUTCFullYear(), utc.getUTCMonth() + 1, utc.getUTCDate(), utc.getUTCHours(), utc.getUTCMinutes(), utc.getUTCSeconds(), utcOffset),
+    // Date.parse skips a parenthesized comment, so a clock inside one ("Nov 27, 2026 (4:47 PM)") is not read.
+    timed: /\d{1,2}:\d{2}/.test(text.replace(/\([^)]*\)/g, "")),
+  };
+}
+
+export function parseLooseDate(value: string | null | undefined, utcOffset = "+08:00"): Date | null {
+  return parsePrintedDate(value, utcOffset).at;
 }
 
 /** A source's claim keeps its precision, apart from the instant used for ordering and windows. */
@@ -80,11 +126,10 @@ export interface PublicationDate {
 }
 
 export function readPublicationDate(value: string | null | undefined, utcOffset = "+08:00"): PublicationDate {
-  const publishedAt = parseLooseDate(value, utcOffset);
-  if (!publishedAt) return { publishedAt: null, publicationTime: null };
-  const timed = /\d{1,2}:\d{2}/.test(value!) || /^\d{14}$/.test(value!.trim());
-  if (timed) return { publishedAt, publicationTime: publishedAt.toISOString() };
-  return { publishedAt, publicationTime: dayAt(publishedAt, utcOffset) };
+  const printed = parsePrintedDate(value, utcOffset);
+  if (!printed.at) return { publishedAt: null, publicationTime: null };
+  if (printed.timed || /^\d{14}$/.test((value ?? "").trim())) return { publishedAt: printed.at, publicationTime: printed.at.toISOString() };
+  return { publishedAt: printed.at, publicationTime: dayAt(printed.at, utcOffset) };
 }
 
 /** Legacy timestamps have lost their source precision; midnight never tells us which it was. */
@@ -113,7 +158,10 @@ function dayAt(at: Date, utcOffset: string): string {
  * source's offset, and "今天/昨天/前天 HH:MM" is that time on that day there.
  */
 export function readRelativeDate(value: string | null | undefined, now: Date, utcOffset = "+08:00"): PublicationDate {
-  const v = collapse(value).replace(/^[^·]+·\s*/, "");
+  // A byline leads the date in the same element ("版面之外·今天 15:46"), and some pages print no byline
+  // at all but still open the element with the separator ("· 37分钟前"). A separator attached to
+  // the words ("·今天 15:46") is punctuation inside one text, not a separator.
+  const v = collapse(value).replace(/^(?:[^·]+·\s*|·\s+)/, "");
   const none = { publishedAt: null, publicationTime: null };
   if (!v) return none;
   const dayTime = /^(今天|昨天|前天)\s*(\d{1,2}):(\d{2})$/.exec(v);
